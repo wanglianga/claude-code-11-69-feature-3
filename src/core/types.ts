@@ -245,3 +245,162 @@ export interface PipelineProgress {
   total: number;
   message: string;
 }
+
+// ---------- 标段有效投标窗口 ----------
+
+/** 时间条款类别：发布时间、可下载起点、答疑、报名、递交、开标 */
+export type TimeClauseKind =
+  | 'publish'
+  | 'download'
+  | 'clarify'
+  | 'registration'
+  | 'submission'
+  | 'opening';
+
+export interface TimeClause {
+  id: string;
+  snapshotId: string;
+  /** 来源材料所属区域（用于绑定区域日历） */
+  regionId: string;
+  kind: TimeClauseKind;
+  /** 原文标签，如“投标截止时间” */
+  label: string;
+  /** 区域本地日期 YYYY-MM-DD */
+  date: string;
+  /** 区域本地时刻 HH:mm；null 表示原文只写日期 */
+  time: string | null;
+  precision: 'date' | 'minute';
+  /** 作用标段；null 表示全项目通用条款 */
+  lotCode: string | null;
+  /** current = 当前有效；reference = 原文引用的被替换历史值 */
+  role: 'current' | 'reference';
+  evidence: TextSpan;
+  ruleId: string;
+  ruleVersion: string;
+  /** 同快照内的匹配序，保证排序确定 */
+  sequence: number;
+}
+
+export type WindowSegmentStatus =
+  | 'available' // 该版本生效且截止未过
+  | 'closed' // 截止已过或项目已终止
+  | 'gap' // 旧截止已过、新截止尚未公告的失效空档
+  | 'undetermined'; // 时区或日历不可判定
+
+export interface WindowSegment {
+  /** 保守起点：原文只见日期时取当日工作结束时刻（不假定全天可用） */
+  fromUtc: number;
+  /** 保守终点：原文只见日期时取当日 00:00 */
+  toUtc: number;
+  /** 乐观起点：原文只见日期时取当日 00:00 */
+  fromUtcEarliest: number;
+  /** 乐观终点：原文只见日期时取当日工作结束时刻 */
+  toUtcLatest: number;
+  /** 本段实际可用的自然天数范围 */
+  naturalDays: { min: number; max: number };
+  /** 本段可用工作时长（分钟）范围：日期精度不足或时区不确定时为区间 */
+  workMinutes: { min: number; max: number };
+  status: WindowSegmentStatus;
+  /** 生效版本来源快照 */
+  versionSnapshotId: string;
+  /** 该段依据的时间条款 id（开始与截止） */
+  evidenceClauseIds: string[];
+  reasons: string[];
+}
+
+export interface ShortenedInterval {
+  /** submission = 递交截止被缩短；registration = 报名截止被缩短 */
+  kind: 'submission' | 'registration';
+  fromUtc: number;
+  toUtc: number;
+  workMinutes: { min: number; max: number };
+  naturalDays: { min: number; max: number };
+  replacedBySnapshotId: string;
+  reasons: string[];
+  evidenceClauseIds: string[];
+}
+
+export interface InvalidVisibleWindow {
+  kind: 'submission' | 'registration';
+  fromUtc: number;
+  toUtc: number;
+  naturalDays: number;
+  reason: string;
+  evidenceClauseIds: string[];
+}
+
+export type WindowExclusionCode =
+  | 'missing-start'
+  | 'missing-submission-deadline'
+  | 'deadline-before-start'
+  | 'unknown-region-calendar'
+  | 'timezone-undetermined'
+  | 'no-effective-window'
+  | 'date-only-precision';
+
+export interface WindowExclusion {
+  code: WindowExclusionCode;
+  message: string;
+  /** true = 该标段被排除出窗口统计；false = 仅标记精度/范围风险 */
+  excludesFromStats: boolean;
+}
+
+export type ScaleBucket = '小型' | '中型' | '大型' | '未知';
+
+export interface LotWindow {
+  projectCode: string;
+  lotCode: string;
+  lotName: string;
+  regionId: string;
+  regionName: string;
+  timeZone: string;
+  offsetMinutes: number;
+  procurementMethod: string;
+  scaleBucket: ScaleBucket;
+  /** 规模依据（项目预算 / 标段预算） */
+  scaleBasis: string;
+  /** 分析固定的日历版本 */
+  calendarVersion: string | null;
+  /** 全部时间条款（含 reference 角色） */
+  clauses: TimeClause[];
+  segments: WindowSegment[];
+  effectiveWorkMinutes: { min: number; max: number };
+  effectiveNaturalDays: { min: number; max: number };
+  shortenedIntervals: ShortenedInterval[];
+  invalidVisibleWindows: InvalidVisibleWindow[];
+  timeZoneUncertainty: {
+    undetermined: boolean;
+    offsetRangeMinutes: [number, number] | null;
+    utcRange: [number, number] | null;
+  } | null;
+  exclusions: WindowExclusion[];
+  /** 逐条款原文证据（时间证据） */
+  evidence: { clauseId: string; snapshotId: string; kind: TimeClauseKind; label: string; text: string; start: number; end: number }[];
+}
+
+export interface WindowDistributionRow {
+  regionId: string;
+  regionName: string;
+  procurementMethod: string;
+  scaleBucket: ScaleBucket;
+  lotCount: number;
+  /** 有效工作时长（小时）的最小 / 中位 / 最大值，取每标段区间中点 */
+  hoursMin: number;
+  hoursMedian: number;
+  hoursMax: number;
+  excludedCount: number;
+}
+
+export interface WindowAnalysis {
+  id: string;
+  version: number;
+  strategy: 'materialized' | 'on_demand';
+  computedAt: number;
+  /** 日历截止点：取该时刻有效的区域日历版本，历史分析不回填新版本 */
+  calendarCutoffAt: number;
+  calendarVersions: { regionId: string; regionName: string; version: string; publishedAt: number }[];
+  lots: LotWindow[];
+  distributions: WindowDistributionRow[];
+  exclusions: { code: WindowExclusionCode; lotCount: number; lots: string[] }[];
+  notes: string[];
+}

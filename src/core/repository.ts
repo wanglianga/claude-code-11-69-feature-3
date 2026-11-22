@@ -20,12 +20,14 @@ import type {
   Publication,
   RelationEdge,
   Snapshot,
+  WindowAnalysis,
   WithdrawnEdgeRecord,
 } from './types';
 import type { EngineMeta } from './engine';
+import type { CalendarVersionRecord } from './calendar';
 
 const DB_NAME = 'procurement_workbench';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORES = [
   'snapshots',
   'batches',
@@ -35,6 +37,8 @@ const STORES = [
   'withdrawn',
   'publications',
   'meta',
+  'calendars',
+  'windowAnalyses',
 ] as const;
 type StoreName = (typeof STORES)[number];
 
@@ -68,6 +72,15 @@ export interface Repository {
   getMeta(): Promise<EngineMeta | null>;
   putMeta(meta: EngineMeta): Promise<void>;
 
+  // 区域日历版本（不可变，追加式）
+  putCalendarVersion(record: CalendarVersionRecord): Promise<void>;
+  getAllCalendarVersions(): Promise<CalendarVersionRecord[]>;
+
+  // 窗口分析发布（版本化，固定所用日历版本）
+  putWindowAnalysis(analysis: WindowAnalysis): Promise<void>;
+  getLatestWindowAnalysis(): Promise<WindowAnalysis | null>;
+  getAllWindowAnalyses(): Promise<WindowAnalysis[]>;
+
   /** 测试与“清空重建”使用 */
   clearAll(): Promise<void>;
 }
@@ -97,6 +110,14 @@ function openDb(): Promise<IDBDatabase> {
         pub.createIndex('version', 'version', { unique: true });
       }
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('calendars')) {
+        const cal = db.createObjectStore('calendars', { keyPath: 'id' });
+        cal.createIndex('regionId', 'regionId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains('windowAnalyses')) {
+        const wa = db.createObjectStore('windowAnalyses', { keyPath: 'id' });
+        wa.createIndex('version', 'version', { unique: true });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -250,6 +271,27 @@ export class IndexedDbRepository implements Repository {
   }
   async putMeta(meta: EngineMeta) {
     await this.bulkPut('meta', [meta]);
+  }
+
+  // calendars
+  async putCalendarVersion(record: CalendarVersionRecord) {
+    await this.bulkPut('calendars', [record]);
+  }
+  getAllCalendarVersions() {
+    return this.getAll<CalendarVersionRecord>('calendars');
+  }
+
+  // window analyses
+  async putWindowAnalysis(analysis: WindowAnalysis) {
+    await this.bulkPut('windowAnalyses', [analysis]);
+  }
+  async getLatestWindowAnalysis(): Promise<WindowAnalysis | null> {
+    const all = await this.getAll<WindowAnalysis>('windowAnalyses');
+    if (!all.length) return null;
+    return all.sort((a, b) => b.version - a.version)[0];
+  }
+  getAllWindowAnalyses() {
+    return this.getAll<WindowAnalysis>('windowAnalyses');
   }
 
   async clearAll() {

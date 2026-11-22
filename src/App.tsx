@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WorkerClient } from './workers/workerClient';
 import type { WorkbenchState } from './state/state';
-import type { ComputeMode, ImportBatch, PipelineProgress, Adjudication } from './core/types';
+import type { ComputeMode, ImportBatch, PipelineProgress, Adjudication, WindowAnalysis } from './core/types';
 import type { ImportFileInput } from './core/engine';
 import { INCREMENTAL_THRESHOLD } from './core/engine';
 import { OverviewPage } from './pages/OverviewPage';
@@ -10,8 +10,9 @@ import { SnapshotsPage } from './pages/SnapshotsPage';
 import { AdjudicationPage } from './pages/AdjudicationPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { PipelinePage } from './pages/PipelinePage';
+import { WindowsPage } from './pages/WindowsPage';
 
-type NavKey = 'overview' | 'import' | 'snapshots' | 'adjudication' | 'projects' | 'pipeline';
+type NavKey = 'overview' | 'import' | 'snapshots' | 'adjudication' | 'projects' | 'windows' | 'pipeline';
 
 const NAV: { key: NavKey; label: string }[] = [
   { key: 'overview', label: '总览' },
@@ -19,6 +20,7 @@ const NAV: { key: NavKey; label: string }[] = [
   { key: 'snapshots', label: '快照与证据' },
   { key: 'adjudication', label: '关系裁决' },
   { key: 'projects', label: '项目发布' },
+  { key: 'windows', label: '投标窗口' },
   { key: 'pipeline', label: '计算流水线' },
 ];
 
@@ -84,6 +86,15 @@ export default function App() {
     await run(() => client.call('recompute', { mode }), `重算与发布完成（${mode}）`);
   };
 
+  const handlePublishWindows = async (
+    strategy: 'materialized' | 'on_demand',
+    calendarCutoffAt: number | null,
+  ): Promise<WindowAnalysis | undefined> =>
+    run(
+      () => client.call('publishWindows', { strategy, calendarCutoffAt }) as Promise<WindowAnalysis>,
+      `窗口分析发布完成（${strategy === 'materialized' ? '物化区间' : '即时推演'}）`,
+    );
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -118,6 +129,19 @@ export default function App() {
         )}
         {nav === 'projects' && state && (
           <ProjectsPage publications={state.publications} snapshots={state.snapshots} facts={state.facts} />
+        )}
+        {nav === 'windows' && state && (
+          <WindowsPage
+            busy={busy}
+            analyses={state.windowAnalyses}
+            calendars={state.calendars}
+            snapshots={state.snapshots}
+            onPublish={handlePublishWindows}
+            onCheck={() => run(() => client.call('checkWindowStrategies', undefined) as Promise<any>)}
+            onDiff={(beforeVersion, afterVersion) =>
+              run(() => client.call('diffWindowVersions', { beforeVersion, afterVersion }) as Promise<any>)
+            }
+          />
         )}
         {nav === 'pipeline' && state && (
           <PipelinePage

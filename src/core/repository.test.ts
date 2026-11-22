@@ -9,6 +9,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { IndexedDbRepository } from './repository';
 import { WorkbenchEngine, type ImportFileInput } from './engine';
+import { defaultCalendarRegistry } from './calendar';
 
 const SAMPLE_DIR = join(process.cwd(), 'sample-archive');
 const samples: ImportFileInput[] = readdirSync(SAMPLE_DIR)
@@ -63,8 +64,21 @@ describe('IndexedDbRepository 端到端', () => {
     const report = await engine2.replay();
     expect(report.equal).toBe(true);
 
-    await repo2.clearAll();
-    expect((await repo2.getAllSnapshots()).length).toBe(0);
-    expect(await repo2.getLatestPublication()).toBeNull();
+    // 窗口分析：日历版本与分析结果持久化，重开后可读取且版本固定
+    const wa = await engine2.publishWindows({ strategy: 'on_demand' });
+    const repo3 = new IndexedDbRepository();
+    const calendars3 = await repo3.getAllCalendarVersions();
+    const analyses3 = await repo3.getAllWindowAnalyses();
+    expect(calendars3.length).toBe(defaultCalendarRegistry().allVersions().length);
+    expect(analyses3).toHaveLength(1);
+    expect(analyses3[0].id).toBe(wa.id);
+    expect(analyses3[0].calendarVersions.length).toBeGreaterThan(0);
+    expect((await repo3.getLatestWindowAnalysis())!.strategy).toBe('on_demand');
+
+    await repo3.clearAll();
+    expect((await repo3.getAllSnapshots()).length).toBe(0);
+    expect(await repo3.getLatestPublication()).toBeNull();
+    expect(await repo3.getLatestWindowAnalysis()).toBeNull();
+    expect((await repo3.getAllCalendarVersions()).length).toBe(0);
   }, 30000);
 });

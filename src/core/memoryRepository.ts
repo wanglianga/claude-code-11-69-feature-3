@@ -8,10 +8,12 @@ import type {
   Publication,
   RelationEdge,
   Snapshot,
+  WindowAnalysis,
   WithdrawnEdgeRecord,
 } from './types';
 import type { Repository } from './repository';
 import type { EngineMeta } from './engine';
+import type { CalendarVersionRecord } from './calendar';
 
 export class MemoryRepository implements Repository {
   snapshots = new Map<string, Snapshot>();
@@ -21,6 +23,8 @@ export class MemoryRepository implements Repository {
   adjudications = new Map<string, Adjudication>();
   withdrawn = new Map<string, WithdrawnEdgeRecord>();
   publications = new Map<string, Publication>();
+  calendarVersions = new Map<string, CalendarVersionRecord>();
+  windowAnalyses = new Map<string, WindowAnalysis>();
   meta: EngineMeta | null = null;
 
   async getAllSnapshots() {
@@ -86,6 +90,22 @@ export class MemoryRepository implements Repository {
   async getAllPublications() {
     return [...this.publications.values()];
   }
+  async putCalendarVersion(record: CalendarVersionRecord) {
+    this.calendarVersions.set(record.id, record);
+  }
+  async getAllCalendarVersions() {
+    return [...this.calendarVersions.values()];
+  }
+  async putWindowAnalysis(analysis: WindowAnalysis) {
+    this.windowAnalyses.set(analysis.id, analysis);
+  }
+  async getLatestWindowAnalysis(): Promise<WindowAnalysis | null> {
+    const all = [...this.windowAnalyses.values()];
+    return all.length ? all.sort((a, b) => b.version - a.version)[0] : null;
+  }
+  async getAllWindowAnalyses() {
+    return [...this.windowAnalyses.values()];
+  }
   async getMeta() {
     return this.meta;
   }
@@ -100,6 +120,8 @@ export class MemoryRepository implements Repository {
     this.adjudications.clear();
     this.withdrawn.clear();
     this.publications.clear();
+    this.calendarVersions.clear();
+    this.windowAnalyses.clear();
     this.meta = null;
   }
 }

@@ -39,6 +39,18 @@ export function OverviewPage(props: { state: WorkbenchState | null }) {
         </div>
       )}
 
+      {s?.latestWindowAnalysis && (
+        <div className="panel">
+          <h3>最新投标窗口分析 v{s.latestWindowAnalysis.version} <Badge className="neutral">{s.latestWindowAnalysis.strategy === 'materialized' ? '物化区间' : '即时推演'}</Badge></h3>
+          <div className="field-grid">
+            <div className="field"><div className="k">标段数 / 可判定</div>{s.latestWindowAnalysis.lots.length} / {s.latestWindowAnalysis.lots.filter((l) => !l.exclusions.some((e) => e.excludesFromStats)).length}</div>
+            <div className="field"><div className="k">日历截止点</div>{formatTime(s.latestWindowAnalysis.calendarCutoffAt)}</div>
+            <div className="field"><div className="k">固定日历版本</div>{s.latestWindowAnalysis.calendarVersions.map((c) => `${c.regionName}:${c.version}`).join('；') || '—'}</div>
+            <div className="field"><div className="k">被更正缩短 / 失效窗口</div>{s.latestWindowAnalysis.lots.filter((l) => l.shortenedIntervals.length > 0).length} / {s.latestWindowAnalysis.lots.filter((l) => l.invalidVisibleWindows.length > 0).length}</div>
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <h3>解析 / 提取 / 求值版本水位</h3>
         <table>
@@ -46,6 +58,8 @@ export function OverviewPage(props: { state: WorkbenchState | null }) {
             <tr><td>结构解析器</td><td className="mono">{s?.versions.PARSER_VERSION ?? '—'}</td></tr>
             <tr><td>事实提取器</td><td className="mono">{s?.versions.EXTRACTOR_VERSION ?? '—'}</td></tr>
             <tr><td>关系求值器</td><td className="mono">{s?.versions.EVALUATOR_VERSION ?? '—'}</td></tr>
+            <tr><td>时间条款提取器</td><td className="mono">{s?.versions.TIME_EXTRACTOR_VERSION ?? '—'}</td></tr>
+            <tr><td>窗口演算器</td><td className="mono">{s?.versions.WINDOW_ENGINE_VERSION ?? '—'}</td></tr>
           </tbody>
         </table>
       </div>

@@ -20,6 +20,7 @@ import type {
   Snapshot,
   FileSource,
   WithdrawnEdgeRecord,
+  WindowAnalysis,
 } from './types';
 import { inferSourceKind, parseDocument, PARSER_VERSION } from './parser';
 import { EXTRACTOR_VERSION, extractFacts } from './extractor';
@@ -27,6 +28,10 @@ import { EVALUATOR_VERSION, evaluateRelations, evaluateRelationsIncremental } fr
 import { buildComponents, emptyModel, planIncremental, type ComponentModel } from './incremental';
 import { publish } from './publisher';
 import { deterministicId, normalizeText, sha256Hex, stableStringify } from './hash';
+import { CalendarRegistry, defaultCalendarRegistry } from './calendar';
+import { TIME_EXTRACTOR_VERSION } from './timeClauses';
+import { WINDOW_ENGINE_VERSION } from './windows';
+import { publishWindowAnalysis, diffWindowAnalyses, type WindowDiffRow } from './windowPublisher';
 import type { Repository } from './repository';
 
 /** 归档规模阈值：超过该快照数默认采用增量模式 */
@@ -44,6 +49,23 @@ export interface EngineMeta {
   lastMode: ComputeMode;
   lastPublicationId: string | null;
   totalImports: number;
+  lastWindowAnalysisId?: string | null;
+}
+
+export interface WindowPublishOptions {
+  strategy: 'materialized' | 'on_demand';
+  /** 日历截止点；null = 使用发布此刻的日历版本 */
+  calendarCutoffAt?: number | null;
+  /** 兼容旧数据：仍按原日历版本复算历史分析 */
+  baseAnalysis?: WindowAnalysis | null;
+}
+
+export interface WindowStrategyReport {
+  equal: boolean;
+  comparedAt: number;
+  materializedAnalysisId: string;
+  onDemandAnalysisId: string;
+  diffs: string[];
 }
 
 export interface ConsistencyReport {
@@ -69,6 +91,7 @@ function defaultMeta(): EngineMeta {
     lastMode: 'full',
     lastPublicationId: null,
     totalImports: 0,
+    lastWindowAnalysisId: null,
   };
 }
 
@@ -430,8 +453,109 @@ export class WorkbenchEngine {
     };
   }
 
+  // ---------------- 区域日历与投标窗口 ----------------
+
+  /** 加载日历注册表；首次运行把内置日历版本冻结写入仓储（追加式，不覆盖） */
+  async loadCalendarRegistry(): Promise<CalendarRegistry> {
+    const registry = new CalendarRegistry();
+    const stored = await this.repo.getAllCalendarVersions();
+    if (stored.length === 0) {
+      const seeded = defaultCalendarRegistry();
+      for (const record of seeded.allVersions()) {
+        await this.repo.putCalendarVersion(record);
+        registry.addVersion(record);
+      }
+    } else {
+      for (const record of stored) registry.addVersion(record);
+    }
+    return registry;
+  }
+
+  /**
+   * 发布标段有效投标窗口分析。
+   * strategy 决定“物化不可变区间”或“按查询即时推演”；两种策略对同一输入
+   * 必须产出相同有效时长，由调用方用 checkWindowStrategies 校验。
+   */
+  async publishWindows(options: WindowPublishOptions): Promise<WindowAnalysis> {
+    const now = this.clock();
+    const registry = await this.loadCalendarRegistry();
+    const snapshots = await this.repo.getAllSnapshots();
+    const facts = await this.repo.getAllFacts();
+    const previous = options.baseAnalysis ?? (await this.repo.getLatestWindowAnalysis());
+    this.progress('publishing', 0, 1, '按区域日历推演标段有效投标窗口');
+    const analysis = await publishWindowAnalysis({
+      snapshots,
+      facts,
+      registry,
+      calendarCutoffAt: options.calendarCutoffAt ?? null,
+      now,
+      strategy: options.strategy,
+      previous,
+    });
+    await this.repo.putWindowAnalysis(analysis);
+    const meta = await this.getMeta();
+    meta.lastWindowAnalysisId = analysis.id;
+    await this.repo.putMeta(meta);
+    this.progress('idle', 1, 1, `窗口分析 v${analysis.version}（${options.strategy}）发布完成`);
+    return analysis;
+  }
+
+  /** 两次窗口分析的差异（日历修订后新版另建结果的对照） */
+  async diffWindowVersions(beforeVersion: number, afterVersion: number): Promise<WindowDiffRow[]> {
+    const analyses = await this.repo.getAllWindowAnalyses();
+    const before = analyses.find((a) => a.version === beforeVersion);
+    const after = analyses.find((a) => a.version === afterVersion);
+    if (!before || !after) throw new Error(`窗口分析版本不存在：v${beforeVersion} / v${afterVersion}`);
+    return diffWindowAnalyses(before, after);
+  }
+
+  /** 双策略一致性校验：物化区间 vs 即时推演，必须得到相同的逐标段有效时长 */
+  async checkWindowStrategies(): Promise<WindowStrategyReport> {
+    const now = this.clock();
+    const registry = await this.loadCalendarRegistry();
+    const snapshots = await this.repo.getAllSnapshots();
+    const facts = await this.repo.getAllFacts();
+    const cutoff = now;
+    const materialized = await publishWindowAnalysis({
+      snapshots, facts, registry, calendarCutoffAt: cutoff, now,
+      strategy: 'materialized',
+    });
+    const onDemand = await publishWindowAnalysis({
+      snapshots, facts, registry, calendarCutoffAt: cutoff, now,
+      strategy: 'on_demand',
+    });
+    const key = (a: WindowAnalysis) =>
+      stableStringify(
+        a.lots.map((l) => ({
+          p: l.projectCode,
+          l: l.lotCode,
+          w: l.effectiveWorkMinutes,
+          d: l.effectiveNaturalDays,
+          seg: l.segments.map((s) => [s.fromUtc, s.toUtc, s.status, s.workMinutes]),
+          sh: l.shortenedIntervals.map((s) => [s.kind, s.fromUtc, s.toUtc]),
+          iv: l.invalidVisibleWindows.map((s) => [s.kind, s.fromUtc, s.toUtc]),
+        })),
+      );
+    const diffs: string[] = [];
+    if (key(materialized) !== key(onDemand)) diffs.push('物化区间与即时推演所得有效时长/片段不一致');
+    if (stableStringify(materialized.exclusions) !== stableStringify(onDemand.exclusions)) diffs.push('排除原因不一致');
+    return {
+      equal: diffs.length === 0,
+      comparedAt: now,
+      materializedAnalysisId: materialized.id,
+      onDemandAnalysisId: onDemand.id,
+      diffs,
+    };
+  }
+
   // ---------------- 版本常量（UI 展示） ----------------
   versions() {
-    return { PARSER_VERSION, EXTRACTOR_VERSION, EVALUATOR_VERSION };
+    return {
+      PARSER_VERSION,
+      EXTRACTOR_VERSION,
+      EVALUATOR_VERSION,
+      TIME_EXTRACTOR_VERSION,
+      WINDOW_ENGINE_VERSION,
+    };
   }
 }

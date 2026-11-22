@@ -7,9 +7,11 @@ import type {
   Publication,
   RelationEdge,
   Snapshot,
+  WindowAnalysis,
   WithdrawnEdgeRecord,
 } from '../core/types';
 import type { EngineMeta } from '../core/engine';
+import type { CalendarVersionRecord } from '../core/calendar';
 
 export interface WorkbenchState {
   snapshots: Snapshot[];
@@ -21,7 +23,16 @@ export interface WorkbenchState {
   publications: Publication[];
   latestPublication: Publication | null;
   meta: EngineMeta | null;
-  versions: { PARSER_VERSION: string; EXTRACTOR_VERSION: string; EVALUATOR_VERSION: string };
+  versions: {
+    PARSER_VERSION: string;
+    EXTRACTOR_VERSION: string;
+    EVALUATOR_VERSION: string;
+    TIME_EXTRACTOR_VERSION: string;
+    WINDOW_ENGINE_VERSION: string;
+  };
+  calendars: CalendarVersionRecord[];
+  windowAnalyses: WindowAnalysis[];
+  latestWindowAnalysis: WindowAnalysis | null;
 }
 
 export type { PipelineProgress };

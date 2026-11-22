@@ -8,7 +8,7 @@
  *  worker → 主线程：{ type: 'progress', payload: PipelineProgress }
  */
 import { IndexedDbRepository } from '../core/repository';
-import { WorkbenchEngine, type ImportFileInput } from '../core/engine';
+import { WorkbenchEngine, type ImportFileInput, type WindowPublishOptions } from '../core/engine';
 import type { PipelineProgress } from '../core/types';
 
 export type WorkerRequest =
@@ -18,7 +18,10 @@ export type WorkerRequest =
   | { reqId: string; type: 'checkConsistency'; payload: undefined }
   | { reqId: string; type: 'replay'; payload: undefined }
   | { reqId: string; type: 'getState'; payload: undefined }
-  | { reqId: string; type: 'clearAll'; payload: undefined };
+  | { reqId: string; type: 'clearAll'; payload: undefined }
+  | { reqId: string; type: 'publishWindows'; payload: WindowPublishOptions }
+  | { reqId: string; type: 'checkWindowStrategies'; payload: undefined }
+  | { reqId: string; type: 'diffWindowVersions'; payload: { beforeVersion: number; afterVersion: number } };
 
 export type WorkerResponse =
   | { reqId: string; type: 'result'; payload: unknown }
@@ -55,7 +58,16 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         latestPublication: await repo.getLatestPublication(),
         meta: await repo.getMeta(),
         versions: engine.versions(),
+        calendars: (await engine.loadCalendarRegistry()).allVersions(),
+        windowAnalyses: await repo.getAllWindowAnalyses(),
+        latestWindowAnalysis: await repo.getLatestWindowAnalysis(),
       };
+    case 'publishWindows':
+      return engine.publishWindows(req.payload);
+    case 'checkWindowStrategies':
+      return engine.checkWindowStrategies();
+    case 'diffWindowVersions':
+      return engine.diffWindowVersions(req.payload.beforeVersion, req.payload.afterVersion);
     case 'clearAll':
       await repo.clearAll();
       return { cleared: true };
